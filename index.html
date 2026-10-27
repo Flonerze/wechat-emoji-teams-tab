@@ -16,11 +16,12 @@
   .hint { max-width:1100px; margin:8px auto 0; padding:0 16px; font-size:13px; color:#6b7280; }
   .grid { max-width:1100px; margin:16px auto 40px; padding:0 16px; display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; }
   .card { background:var(--card); border-radius:10px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.08); display:flex; flex-direction:column; }
-  .card .thumb { height:130px; display:flex; align-items:center; justify-content:center; background:#fafafa; cursor:pointer; }
+  .card .thumb { position:relative; height:130px; display:flex; align-items:center; justify-content:center; background:#fafafa; cursor:pointer; }
   .card .thumb img { max-width:100%; max-height:130px; object-fit:contain; }
   .card .foot { display:flex; border-top:1px solid #eee; }
   .card .foot button { flex:1; padding:8px 0; border:0; background:#fff; font-size:13px; cursor:pointer; color:#374151; }
   .card .foot button:hover { background:#f0f9f4; color:var(--green-dark); }
+  .card .badge { position:absolute; top:6px; right:6px; background:#ffb300; color:#fff; font-size:11px; padding:2px 6px; border-radius:6px; }
   .empty { text-align:center; color:#9aa0a6; padding:40px 16px; font-size:14px; line-height:1.8; }
   .toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%); background:rgba(0,0,0,.8); color:#fff; padding:10px 16px; border-radius:8px; font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s; z-index:99; }
   .toast.show { opacity:1; }
@@ -29,7 +30,7 @@
 <body>
 <header>
   <h1>微信表情包画廊</h1>
-  <p>点击表情复制图片，去 Teams 聊天 Ctrl+V 粘贴；点“下载”保存动图原文件</p>
+  <p>点击表情复制图片，去 Teams 聊天 Ctrl+V 粘贴；动图(gif)点“下载”后拖入 Teams 保留动画</p>
 </header>
 <div class="toolbar">
   <input id="search" type="search" placeholder="搜索表情文件名…">
@@ -37,7 +38,7 @@
 <div class="hint" id="count"></div>
 <div class="grid" id="grid"></div>
 <div class="empty" id="empty" style="display:none">
-  还没有表情包。<br>请把微信里保存的表情图片放进 <code>emoji/</code> 文件夹，<br>然后运行 <code>python build_list.py</code> 生成列表。
+  还没有表情包。<br>把表情图片上传到 GitHub 仓库的 <code>emoji/</code> 文件夹即可，<br>页面会自动读取（无需再手动生成列表）。
 </div>
 <div class="toast" id="toast"></div>
 <script>
@@ -45,13 +46,50 @@ let emojis = [];
 let toastTimer = null;
 function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),2600); }
 
-async function load(){
+const REPO_API = 'https://api.github.com/repos/Flonerze/wechat-emoji-teams-tab/contents/emoji';
+function isImage(n){ n = n.toLowerCase(); return n.endsWith('.gif')||n.endsWith('.png')||n.endsWith('.jpg')||n.endsWith('.jpeg')||n.endsWith('.webp')||n.endsWith('.bmp'); }
+const CACHE_KEY = 'emojiListCache';
+const CACHE_TTL = 5 * 60 * 1000;
+
+function readCache(){
   try{
-    const r = await fetch('emoji.json?t=' + Date.now());
-    const data = await r.json();
-    emojis = data.emojis || [];
-  }catch(e){ emojis = []; }
-  render();
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+    if(c && c.list && (Date.now() - c.t) < CACHE_TTL) return c.list;
+  }catch(e){}
+  return null;
+}
+function writeCache(list){
+  try{ localStorage.setItem(CACHE_KEY, JSON.stringify({list:list, t:Date.now()})); }catch(e){}
+}
+async function fetchListFromApi(){
+  const resp = await fetch(REPO_API, { headers: { 'Accept': 'application/vnd.github+json' } });
+  if(!resp.ok) throw new Error('api ' + resp.status);
+  const data = await resp.json();
+  if(!Array.isArray(data)) throw new Error('not array');
+  return data.filter(it => it.type === 'file' && isImage(it.name)).map(it => it.name).sort();
+}
+async function fetchListFromJson(){
+  const r = await fetch('emoji.json?t=' + Date.now());
+  const d = await r.json();
+  return (d.emojis || []).sort();
+}
+async function load(){
+  const cached = readCache();
+  if(cached){ emojis = cached; render(); }
+  try{
+    emojis = await fetchListFromApi();
+    writeCache(emojis);
+    render();
+  }catch(e){
+    try{
+      emojis = await fetchListFromJson();
+      writeCache(emojis);
+      render();
+    }catch(e2){
+      if(emojis.length === 0){ emojis = []; render(); }
+      toast('加载表情列表失败，请稍后刷新');
+    }
+  }
 }
 function render(){
   const grid = document.getElementById('grid');
@@ -71,6 +109,10 @@ function render(){
     const img = document.createElement('img'); img.src='emoji/'+encodeURIComponent(f); img.alt=f; img.loading='lazy';
     img.onerror = ()=>{ img.style.display='none'; };
     thumb.appendChild(img);
+    if(f.toLowerCase().endsWith('.gif')){
+      const b = document.createElement('span'); b.className='badge'; b.textContent='动图';
+      thumb.appendChild(b);
+    }
     thumb.onclick = ()=>copyImage(f);
     const foot = document.createElement('div'); foot.className='foot';
     const bCopy = document.createElement('button'); bCopy.textContent='复制'; bCopy.onclick=(e)=>{e.stopPropagation(); copyImage(f);};
