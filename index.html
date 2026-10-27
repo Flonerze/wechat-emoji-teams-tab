@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>微信表情包画廊</title>
+<style>
+  :root { --green:#07C160; --green-dark:#06AD56; --bg:#f5f6f7; --card:#fff; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; background:var(--bg); color:#1f2329; }
+  header { background:var(--green); color:#fff; padding:16px 20px; position:sticky; top:0; z-index:10; box-shadow:0 2px 6px rgba(0,0,0,.12); }
+  header h1 { margin:0; font-size:20px; }
+  header p { margin:4px 0 0; font-size:13px; opacity:.92; }
+  .toolbar { max-width:1100px; margin:16px auto 0; padding:0 16px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  #search { flex:1; min-width:200px; padding:9px 12px; border:1px solid #d0d3d6; border-radius:8px; font-size:14px; }
+  .hint { max-width:1100px; margin:8px auto 0; padding:0 16px; font-size:13px; color:#6b7280; }
+  .grid { max-width:1100px; margin:16px auto 40px; padding:0 16px; display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; }
+  .card { background:var(--card); border-radius:10px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.08); display:flex; flex-direction:column; }
+  .card .thumb { height:130px; display:flex; align-items:center; justify-content:center; background:#fafafa; cursor:pointer; }
+  .card .thumb img { max-width:100%; max-height:130px; object-fit:contain; }
+  .card .foot { display:flex; border-top:1px solid #eee; }
+  .card .foot button { flex:1; padding:8px 0; border:0; background:#fff; font-size:13px; cursor:pointer; color:#374151; }
+  .card .foot button:hover { background:#f0f9f4; color:var(--green-dark); }
+  .empty { text-align:center; color:#9aa0a6; padding:40px 16px; font-size:14px; line-height:1.8; }
+  .toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%); background:rgba(0,0,0,.8); color:#fff; padding:10px 16px; border-radius:8px; font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s; z-index:99; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>微信表情包画廊</h1>
+  <p>点击表情复制图片，去 Teams 聊天 Ctrl+V 粘贴；点“下载”保存动图原文件</p>
+</header>
+<div class="toolbar">
+  <input id="search" type="search" placeholder="搜索表情文件名…">
+</div>
+<div class="hint" id="count"></div>
+<div class="grid" id="grid"></div>
+<div class="empty" id="empty" style="display:none">
+  还没有表情包。<br>请把微信里保存的表情图片放进 <code>emoji/</code> 文件夹，<br>然后运行 <code>python build_list.py</code> 生成列表。
+</div>
+<div class="toast" id="toast"></div>
+<script>
+let emojis = [];
+let toastTimer = null;
+function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),2600); }
+
+async function load(){
+  try{
+    const r = await fetch('emoji.json?t=' + Date.now());
+    const data = await r.json();
+    emojis = data.emojis || [];
+  }catch(e){ emojis = []; }
+  render();
+}
+function render(){
+  const grid = document.getElementById('grid');
+  const empty = document.getElementById('empty');
+  const count = document.getElementById('count');
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const list = q ? emojis.filter(f => f.toLowerCase().includes(q)) : emojis;
+  count.textContent = `共 ${emojis.length} 个表情${q ? '，筛选出 '+list.length+' 个' : ''}`;
+  empty.style.display = emojis.length===0 ? '' : 'none';
+  grid.innerHTML = '';
+  if(list.length===0 && emojis.length>0){
+    const d=document.createElement('div'); d.className='empty'; d.textContent='没有匹配的表情'; grid.appendChild(d); return;
+  }
+  for(const f of list){
+    const card = document.createElement('div'); card.className='card';
+    const thumb = document.createElement('div'); thumb.className='thumb'; thumb.title=f;
+    const img = document.createElement('img'); img.src='emoji/'+encodeURIComponent(f); img.alt=f; img.loading='lazy';
+    img.onerror = ()=>{ img.style.display='none'; };
+    thumb.appendChild(img);
+    thumb.onclick = ()=>copyImage(f);
+    const foot = document.createElement('div'); foot.className='foot';
+    const bCopy = document.createElement('button'); bCopy.textContent='复制'; bCopy.onclick=(e)=>{e.stopPropagation(); copyImage(f);};
+    const bDl = document.createElement('button'); bDl.textContent='下载'; bDl.onclick=(e)=>{e.stopPropagation(); download(f);};
+    foot.appendChild(bCopy); foot.appendChild(bDl);
+    card.appendChild(thumb); card.appendChild(foot);
+    grid.appendChild(card);
+  }
+}
+async function copyImage(file){
+  const url = 'emoji/' + encodeURIComponent(file);
+  try{
+    const resp = await fetch(url);
+    const blob = await resp.blob();
+    let type = blob.type;
+    let itemBlob = blob;
+    if(!['image/png','image/gif','image/jpeg','image/webp'].includes(type)){
+      type='image/png'; itemBlob=await toPng(blob);
+    }
+    await navigator.clipboard.write([new ClipboardItem({[type]: itemBlob})]);
+    toast('已复制，去 Teams 聊天按 Ctrl+V 粘贴');
+  }catch(e){
+    try{
+      const resp = await fetch(url);
+      const blob = await resp.blob();
+      const png = await toPng(blob);
+      await navigator.clipboard.write([new ClipboardItem({'image/png': png})]);
+      toast('已复制(图片)，去 Teams 粘贴');
+    }catch(e2){
+      toast('复制失败，请点“下载”保存后再拖到 Teams');
+    }
+  }
+}
+function toPng(blob){
+  return new Promise((resolve,reject)=>{
+    const url = URL.createObjectURL(blob);
+    const im = new Image();
+    im.onload = ()=>{
+      const c = document.createElement('canvas');
+      c.width = im.naturalWidth; c.height = im.naturalHeight;
+      c.getContext('2d').drawImage(im,0,0);
+      URL.revokeObjectURL(url);
+      c.toBlob(b=> b?resolve(b):reject(new Error('toBlob failed')), 'image/png');
+    };
+    im.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error('img load failed')); };
+    im.src = url;
+  });
+}
+function download(file){
+  const a = document.createElement('a');
+  a.href = 'emoji/' + encodeURIComponent(file);
+  a.download = file;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+document.getElementById('search').addEventListener('input', render);
+load();
+</script>
+</body>
+</html>
+
